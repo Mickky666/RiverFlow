@@ -17,7 +17,7 @@ class _PipeMeta(type):
             run_argspec[0][0] == 'self' and \
             run_argspec[0][1] == _PipeMeta._FLOWPOOL_ARG_NAME and \
             run_argspec[0][2] == _PipeMeta._CONFIG_ARG_NAME and \
-            run_argspec[0][2] == _PipeMeta._MODE_ARG_NAME
+            run_argspec[0][3] == _PipeMeta._MODE_ARG_NAME
         assert run_argspec[1] is None
         assert run_argspec[2] is None
         assert run_argspec[3] is None
@@ -53,29 +53,32 @@ class Pipe(object):
     def __init__(self):
         self.input_flow = []
         self.output_flow = []
-        self.config_used = []
+        self.config_used = dict()
 
     def run(self, flow_pool, config, mode):
         raise NotImplementedError
 
-
-class _PipelineMeta(type):
-
-    def __new__(typ, *args, **kwargs):
-        return super(_PipelineMeta, typ).__new__(typ, *args, **kwargs)
-
-    def __init__(cls, *args, **kwargs):
-        super(_PipelineMeta, cls).__init__(*args, **kwargs)
+    def __rshift__(self, other):
+        assert isinstance(other, Pipe), "The right side of >> operator needs to be a Pipe object."
+        return Pipeline(self, other)
 
 
 class Pipeline(object):
-    __metaclass__ = _PipeMeta
-
-    def __new__(cls, *args, **kwargs):
-        return super(Pipeline, cls).__new__(cls, *args, **kwargs)
 
     def __init__(self, *args, **kwargs):
-        super(Pipeline, self).__init__(*args, **kwargs)
+        assert all(isinstance(x, Pipe) for x in args), "Pipeline can only build on Pipe object."
+        self.pipes = list(args)
+
+    def run(self, use_config, running_flow_pool=None):
+        running_flow_pool = FlowPool() if running_flow_pool is None else running_flow_pool
+        for pipe in self.pipes:
+            pipe.run(flow_pool=running_flow_pool, config=use_config, mode="run")
+        return running_flow_pool
+
+    def __rshift__(self, other):
+        assert isinstance(other, Pipe), "The right side of >> operator needs to be a Pipe object."
+        self.pipes.append(other)
+        return self
 
 
 class FlowPool(object):
@@ -87,7 +90,7 @@ class FlowPool(object):
         self._read_cache = []
         self._write_cache = []
 
-    def _pop_cache(self):
+    def pop_cache(self):
         output = {
             self.READ_CACHE_KEY: self._read_cache,
             self.WRITE_CACHE_KEY: self._write_cache,
@@ -124,24 +127,26 @@ class Config(object):
     CACHE_KEY = "read_cache"
     SERIALIZATION_FNAME = "config.json"
 
-    def __init__(self):
-        self.config_map = dict()
-        self._cache = []
+    def __init__(self, start_from=None):
+        self.config_map = dict() if start_from is None else start_from
+        self._check_type()
+        self._cache = dict()
 
     def _check_type(self):
+        assert isinstance(self.config_map, dict)
         for config_name in self.config_map:
             assert type(self.config_map[config_name]) in (int, float, str)
 
-    def _pop_cache(self):
+    def pop_cache(self):
         output = {self.CACHE_KEY: self._cache}
-        self._cache = []
+        self._cache = dict()
         return output
 
     def get_config(self, config_name):
         if config_name not in self.config_map:
             raise Exception("Error when trying to get config: ({}). "
                             "No such config exists.".format(config_name))
-        self._cache.append(config_name)
+        self._cache[config_name] = self.config_map[config_name]
         return self.config_map[config_name]
 
     def serialize_to(self, target_dir):
